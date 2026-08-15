@@ -3,7 +3,7 @@
  * Plugin Name: Ars Nova Installer Fix
  * Plugin URI:  https://arsnovasingers.org
  * Description: Renames a plugin's extracted folder during install to match the plugin's own main file. Makes GitHub source zips (which always extract to repo-branch/) install and UPDATE correctly instead of silently creating a duplicate plugin.
- * Version:     1.0.0
+ * Version:     1.1.0
  * Author:      Ars Nova Singers
  * License:     GPL-2.0-or-later
  * Requires at least: 5.8
@@ -14,7 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ANS_IFIX_VERSION', '1.0.0' );
+define( 'ANS_IFIX_VERSION', '1.1.0' );
 
 /**
  * Why this exists.
@@ -37,11 +37,36 @@ define( 'ANS_IFIX_VERSION', '1.0.0' );
  *
  * The rule, deliberately conservative:
  *   if the extracted directory contains EXACTLY ONE top-level .php file
- *   carrying a `Plugin Name:` header, rename the directory to match that file.
+ *   carrying a `Plugin Name:` header, AND the extracted folder is that name
+ *   plus a "-suffix" (i.e. it really does look like a GitHub archive), rename
+ *   the directory to match that file.
  *
  * Zero candidates, or more than one, means we do not guess - the source is
  * handed back untouched and WordPress behaves exactly as it always has. The
  * same applies if the name already matches, or if the move fails.
+ *
+ * ---------------------------------------------------------------------------
+ * 1.1.0 - the folder-match test, and why it had to be added
+ *
+ * 1.0.0 renamed on the main file alone, on the premise that a plugin's folder
+ * always matches its main file. That premise is a convention, not a rule, and
+ * Tickera breaks it deliberately: EVERY Tickera add-on ships as index.php.
+ *
+ * Observed on staging 2026-08-15 installing Tickera CSV Export: csv-export/
+ * was renamed to index/, and the install then failed at activation. The real
+ * danger was the next install, not that one. Live already runs three Tickera
+ * add-ons (checkinera-premium, bulk-discount-codes, check-in-notifications),
+ * all with index.php as their main file - so a second vendor install would
+ * have resolved to the same index/ target and, because this filter DELETES a
+ * stale target before moving, silently destroyed the first.
+ *
+ * Two guards now:
+ *   1. A generically-named main file (index.php, main.php, plugin.php...)
+ *      tells us nothing about the folder name, so never rename on one.
+ *   2. Only rename when the extracted folder is the desired name plus a
+ *      "-suffix" - exactly GitHub's <repo>-<ref> shape. A vendor who names
+ *      their folder differently from their main file has made a choice; that
+ *      is not a defect for us to correct.
  *
  * This runs for plugin installs and updates from ANY source, including manual
  * wp-admin zip uploads. That is intentional: a hand-uploaded GitHub zip hits
@@ -92,6 +117,23 @@ function ans_ifix_rename_source_to_main_file( $source, $remote_source = '', $upg
 
 	$desired = basename( $candidates[0], '.php' );
 	if ( '' === $desired || $desired === $current ) {
+		return $source;
+	}
+
+	// Guard 1: a generic main-file name carries no information about the folder.
+	// Tickera ships every add-on as index.php; renaming on that would funnel
+	// csv-export/, checkinera/ and the rest into one index/ folder.
+	$generic = array( 'index', 'main', 'plugin', 'init', 'class', 'loader', 'bootstrap', 'functions' );
+	if ( in_array( strtolower( $desired ), $generic, true ) ) {
+		return $source;
+	}
+
+	// Guard 2: only correct the shape this plugin exists for. GitHub archives
+	// extract to <repo>-<ref>, so the folder is the desired name plus a
+	// "-suffix". Anything else is a vendor naming their folder their own way,
+	// which is not ours to override.
+	$suffix = substr( $current, strlen( $desired ) );
+	if ( 0 !== strpos( $current, $desired ) || '' === $suffix || '-' !== $suffix[0] ) {
 		return $source;
 	}
 
